@@ -1,30 +1,122 @@
 ---
-title: "Untitled"
+title: "Machine Learning Project"
+subtitle: "Using Accelerometer Data to predict how well an exercise is performed"
 author: "Suzette Lizamore"
-date: "4 December 2017"
+date: "2 December 2017"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+## Background
+
+The current trend of wearable fitness devices enables a large amount of data about personal activity to be collected relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+This report examines whether it is possible to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to determine whether barbell lifts have been performed either correctly or incorrectly in 5 different ways:
+
+* Class A - performed exactly according to specifications
+* Class B - throwing the elbows to the front
+* Class C - lifting the dumbbell only halfway
+* Class D - lowering the dumbbell only halfway
+* Class E - throwing the hips to the front.
+
+The data used was obtained from the following website:  http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). We appreciate their generosity in allowing the use of their data for this assignment.
+
+
+
+```{r setup,  warning = FALSE, message=FALSE}
+
+## Read in libraries
+
+library(caret)
+library(parallel)
+library(doParallel)
+library(tree)
+library(randomForest)
+library(knitr)
+
+## Set up parallell processing
+fitControl <- trainControl(method = "cv",number = 3, allowParallel = TRUE)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+## Read in training and test data. This data has been downloaded from the site mentioned above and stored locally on the computer.
+
+training <- read.csv("~/R work/Machine Learning/pml-training.csv",header=TRUE,comment.char="",na.strings="NA",stringsAsFactors = FALSE)
+testing <- read.csv("~/R work/Machine Learning/pml-testing.csv",header=TRUE,comment.char="",na.strings="NA")
+
 ```
 
-## R Markdown
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+## Cleaning the dataset
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+The training set provided has `r {nrow(training)}` rows and `r {ncol(training)}`columns. The testing dataset contains `r {nrow(testing)}` rows and `r {ncol(testing)}` columns. An initial examination of the data revealed a number of variables with a large number of missing values. The first step was to count the number of missing observations for each variable in the testing dataset and to remove any columns where all variables were missing. The testing dataset was used since it is not possible to predict with variables that are not available.
 
-```{r cars}
-summary(cars)
+```{r RF,cache = TRUE} 
+
+## Check the number of NAs in each column of the testing dataset and remove any columns that consist only of NAs
+
+Check_na <- sapply(testing,is.na)
+sum_na <- apply(Check_na,FUN=sum,2)
+
+## Remove these columns from the testing and training data sets           
+testing_red <- testing[,sum_na==0]
+training_red <- training[,sum_na==0]
+
 ```
 
-## Including Plots
+There were `r {length(sum_na[sum_na!=0])}` columns with all missing values that were removed, leaving `r {length(sum_na[sum_na==0])}` columns. The data in the rows relates to different measurements for each of the six participantsas they performed the exercises in the particular manner prescribed. THe type of data is shown in the plot below and each participant and exercise type have sufficient data for modelling.
 
-You can also embed plots, for example:
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r Plot 1 , fig.width=10, fig.height=10}
+
+ggplot(training,aes(training$user_name,fill=factor(training$user_name))) + facet_grid(.~ training$classe) + geom_bar() + labs(x="",title="Number of measurements for types of exercise peformed by each user") + theme(legend.position = "none", axis.text.x = element_text(angle = 90, hjust = 1)) 
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+Prior to commencing analysis, six further columns were removed relating to row number and various time stamp observations. These observations do not impact the performance of the exercises.
+
+
+```{r Final_Clean, cache=TRUE }
+
+## List of columns not needed for random forest analysis.
+remove <- c("X","raw_timestamp_part_1","raw_timestamp_part_2","cvtd_timestamp",
+            "new_window","num_window")
+
+## Remove columns 
+testing_final <- testing_red[,-match(remove,colnames(testing_red))]
+training_final <<- training_red[,-match(remove,colnames(training_red))]
+
+## Fit a random forest model to the training data
+rffit <- train(classe ~., data=training_final ,method="rf")
+
+```
+
+
+## Details of Modelling Conducted
+
+* Random Forest prediction using the Caret package in R was the method chosen to determine the type of execution of the exercise.
+* Default settings were used which included 3 fold cross validation, number of trees was set at 500
+* Accuracy was used to select the optimal model
+
+
+The results for the model fit are shown below along with the importance plot which shows the key variables used in the model. The number of variables randomly selected as cadidates at each split (mtry) that produced the best accuracy was `r {rffit$finalModel$mtry}`. The accuracy was excellent, above 99%.
+
+`r {kable(rffit$results, caption="Model Accuracy")}`
+
+The confusion matrix shows very low error rates of less than 1%. Class A and E have the lowest error rates.
+
+`r { kable(rffit$finalModel$confusion, caption="Confusion Matrix")}`
+
+```{r importance, echo=FALSE, fig.height=10, fig.width=10}
+
+varImpPlot(rffit$finalModel,main= "Variable Importance as measured by Random Forest")
+```
+
+The model correctly predicted the 20 exercise types when run on the testing data.
+
+
+```{r ExitParallel}
+## Release parallel programming cores
+stopCluster(cluster)
+registerDoSEQ()
+```
+
